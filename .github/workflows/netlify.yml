@@ -1,0 +1,51 @@
+name: Deploy LeadGenius AI to Netlify
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Build & Deploy to Netlify
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout the repository ────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Install Netlify CLI ────────────────────────────────────
+      - name: Install Netlify CLI
+        run: npm install -g netlify-cli
+
+      # ── 3. Deploy to Netlify ──────────────────────────────────────
+      #       • On PR:   deploys a preview URL  (--alias=deploy-preview)
+      #       • On main: deploys to production  (--prod)
+      - name: Deploy (Preview on PRs / Production on main)
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID:    ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            netlify deploy \
+              --dir=. \
+              --auth=$NETLIFY_AUTH_TOKEN \
+              --site=$NETLIFY_SITE_ID \
+              --alias=deploy-preview-${{ github.event.number }} \
+              --message="PR #${{ github.event.number }} — ${{ github.event.pull_request.title }}"
+          else
+            netlify deploy \
+              --dir=. \
+              --prod \
+              --auth=$NETLIFY_AUTH_TOKEN \
+              --site=$NETLIFY_SITE_ID \
+              --message="Production deploy — ${{ github.sha }}"
+          fi
+
+      # ── 4. (Optional) Print deployment URL ───────────────────────
+      - name: Deployment complete
+        run: echo "✅ Deployment finished. Check Netlify dashboard for live URL."
