@@ -669,40 +669,7 @@
       const timeoutId = setTimeout(() => activeAbortController.abort(), 30000);
 
       try {
-        /* ── ① Dynamic Model Router ────────────────────────────────── */
-        const MODEL_CANDIDATES = [
-          'gemini-1.5-flash',
-          'models/gemini-1.5-flash',
-          'gemini-1.5-flash-latest',
-        ];
-
-        const resolveModel = async (genAI) => {
-          const errors = [];
-          for (const candidate of MODEL_CANDIDATES) {
-            if (signal.aborted) throw new Error('AbortError: Generation cancelled.');
-            try {
-              const m = genAI.getGenerativeModel({ model: candidate });
-              await m.generateContent('ping');
-              return { model: m, modelName: candidate };
-            } catch (err) {
-              const msg = (err.message || '').toLowerCase();
-              const is404 = msg.includes('404') || msg.includes('not found') ||
-                            (msg.includes('model') && msg.includes('not'));
-              if (is404) {
-                errors.push(`${candidate}: not found (404)`);
-                continue;
-              }
-              throw err;
-            }
-          }
-          throw new Error(`MODEL_NOT_FOUND: Tried [${MODEL_CANDIDATES.join(', ')}]. Details: ${errors.join(' | ')}`);
-        };
-
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const { model, modelName } = await resolveModel(genAI);
-        console.info(`[LeadGenius AI] ✓ Model resolved: ${modelName}`);
-
-        /* ── ④ Build the full B2B prompt ─────────────────────────── */
+        /* ── ① Build the B2B prompt first (no network calls yet) ─────── */
         const currentYear = new Date().getFullYear();
         const prompt = `
 You are an expert B2B sales strategist with 15+ years of experience in enterprise outreach.
@@ -735,19 +702,69 @@ Respond with ONLY this JSON structure (no extra text):
 }
 `.trim();
 
-        /* ── ⑤ Full generation with AbortController race ─────────── */
-        const fetchPromise = model.generateContent(prompt);
-        const abortPromise = new Promise((_, reject) => {
-          signal.addEventListener('abort', () =>
-            reject(new Error('AbortError: Generation cancelled.')));
-        });
+        /* ── ② Version-agnostic model fallback (no ping, one call per candidate) ──
+           Key design decisions:
+           • getGenerativeModel() is pure client-side — makes NO network request.
+           • Only generateContent() hits the network. We retry ONLY on strict HTTP
+             404 ("model not found"). Auth (401/403) and quota (429) errors rethrow
+             immediately — retrying different model names won't fix those.
+           • The old 'ping' approach wasted one API call per attempt and the broad
+             (msg.includes('model') && msg.includes('not')) heuristic incorrectly
+             classified auth errors as 404s, exhausting all candidates.
+        ─────────────────────────────────────────────────────────────────────────── */
+        const MODEL_CANDIDATES = [
+          'gemini-1.5-flash',         // preferred: simplest alias, works in all SDK versions
+          'gemini-1.5-flash-latest',  // pinned alias fallback
+          'gemini-pro',               // legacy fallback if 1.5-flash is regionally gated
+        ];
 
-        const result = await Promise.race([fetchPromise, abortPromise]);
+        const genAI = new GoogleGenerativeAI(apiKey);
+        let result = null;
+        let resolvedModel = null;
+
+        for (const candidate of MODEL_CANDIDATES) {
+          if (signal.aborted) throw new Error('AbortError: Generation cancelled.');
+          try {
+            const m = genAI.getGenerativeModel({ model: candidate });
+
+            // AbortController race — same pattern for every candidate
+            const fetchPromise = m.generateContent(prompt);
+            const abortPromise = new Promise((_, reject) => {
+              signal.addEventListener('abort', () =>
+                reject(new Error('AbortError: Generation cancelled.')));
+            });
+
+            result = await Promise.race([fetchPromise, abortPromise]);
+            resolvedModel = candidate;
+            console.info(`[LeadGenius AI] ✓ Model resolved: ${candidate}`);
+            break; // success — stop trying candidates
+
+          } catch (err) {
+            const msg = (err.message || '').toLowerCase();
+            // STRICT 404 check: only the literal HTTP status code or "model.*not found"
+            // Do NOT match broad phrases like "model is not accessible" (that's a 403)
+            const isModelNotFound = msg.includes(' 404 ') ||
+                                    msg.startsWith('404') ||
+                                    msg.includes('[404]') ||
+                                    (msg.includes('model') && msg.includes('not found'));
+            if (isModelNotFound) {
+              console.warn(`[LeadGenius AI] Model "${candidate}" returned 404, trying next…`);
+              continue; // silently try the next candidate
+            }
+            // Auth (401/403), quota (429), network, format — rethrow immediately
+            throw err;
+          }
+        }
+
+        // All candidates exhausted without success
+        if (!result) {
+          throw new Error('MODEL_NOT_FOUND: All Gemini model candidates returned 404.');
+        }
+
         if (signal.aborted) throw new Error('AbortError: Generation cancelled.');
-
         const text = result.response.text();
 
-        /* ── ⑥ Parse JSON response ───────────────────────────────── */
+        /* ── ③ Parse JSON response ───────────────────────────────── */
         const cleaned = text.replace(/```json|```/gi, '').trim();
         let data;
         try {
