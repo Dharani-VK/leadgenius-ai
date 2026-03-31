@@ -641,7 +641,6 @@
       hide('loader');
 
       if (!apiKey) return showError('Please enter your Gemini API key.');
-      // UAT Guard Clause: reject empty strings AND whitespace-only input
       const cleanCompany = company.trim();
       if (!cleanCompany || cleanCompany.length < 3) {
         alert('Please enter a valid company name (minimum 3 characters).');
@@ -650,7 +649,6 @@
       if (!role) return showError('Please enter the decision maker\'s role.');
       if (!product) return showError('Please enter what your product/service does.');
 
-      // Save valid API Key to localStorage to ensure it persists right before call 
       localStorage.setItem('gemini_api_key', apiKey);
 
       /* --- UI state: loading --- */
@@ -664,18 +662,49 @@
         Generating…`;
       show('loader');
 
-      /* --- Setup AbortController + 30s auto-timeout (fixes infinite loading bug) --- */
+      /* --- Setup AbortController + 30s auto-timeout --- */
       if (activeAbortController) activeAbortController.abort();
       activeAbortController = new AbortController();
       const signal = activeAbortController.signal;
-      // Auto-abort after 30 seconds to prevent infinite loading state
-      const timeoutId = setTimeout(() => {
-        activeAbortController.abort();
-      }, 30000);
+      const timeoutId = setTimeout(() => activeAbortController.abort(), 30000);
 
-      /* --- build prompt --- */
-      const currentYear = new Date().getFullYear();
-      const prompt = `
+      try {
+        /* ── ① Dynamic Model Router ────────────────────────────────── */
+        const MODEL_CANDIDATES = [
+          'gemini-1.5-flash',
+          'models/gemini-1.5-flash',
+          'gemini-1.5-flash-latest',
+        ];
+
+        const resolveModel = async (genAI) => {
+          const errors = [];
+          for (const candidate of MODEL_CANDIDATES) {
+            if (signal.aborted) throw new Error('AbortError: Generation cancelled.');
+            try {
+              const m = genAI.getGenerativeModel({ model: candidate });
+              await m.generateContent('ping');
+              return { model: m, modelName: candidate };
+            } catch (err) {
+              const msg = (err.message || '').toLowerCase();
+              const is404 = msg.includes('404') || msg.includes('not found') ||
+                            (msg.includes('model') && msg.includes('not'));
+              if (is404) {
+                errors.push(`${candidate}: not found (404)`);
+                continue;
+              }
+              throw err;
+            }
+          }
+          throw new Error(`MODEL_NOT_FOUND: Tried [${MODEL_CANDIDATES.join(', ')}]. Details: ${errors.join(' | ')}`);
+        };
+
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const { model, modelName } = await resolveModel(genAI);
+        console.info(`[LeadGenius AI] ✓ Model resolved: ${modelName}`);
+
+        /* ── ④ Build the full B2B prompt ─────────────────────────── */
+        const currentYear = new Date().getFullYear();
+        const prompt = `
 You are an expert B2B sales strategist with 15+ years of experience in enterprise outreach.
 
 Target Company: ${company}
@@ -706,24 +735,19 @@ Respond with ONLY this JSON structure (no extra text):
 }
 `.trim();
 
-      try {
-        const genAI = new GoogleGenerativeAI(apiKey);
-        
-        // Wrap generation in a race Promise to force Abort handling if API hangs
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-        
+        /* ── ⑤ Full generation with AbortController race ─────────── */
         const fetchPromise = model.generateContent(prompt);
         const abortPromise = new Promise((_, reject) => {
-          signal.addEventListener('abort', () => reject(new Error('AbortError: Generation cancelled.')));
+          signal.addEventListener('abort', () =>
+            reject(new Error('AbortError: Generation cancelled.')));
         });
-        
-        const result = await Promise.race([fetchPromise, abortPromise]);
-        const text   = result.response.text();
 
-        // Check if aborted natively after resolution just in case
+        const result = await Promise.race([fetchPromise, abortPromise]);
         if (signal.aborted) throw new Error('AbortError: Generation cancelled.');
 
-        /* --- parse JSON (strip any accidental fences) --- */
+        const text = result.response.text();
+
+        /* ── ⑥ Parse JSON response ───────────────────────────────── */
         const cleaned = text.replace(/```json|```/gi, '').trim();
         let data;
         try {
@@ -732,7 +756,7 @@ Respond with ONLY this JSON structure (no extra text):
           throw new Error('AI returned unexpected format. Please try again.');
         }
 
-        /* --- render pain points --- */
+        /* ── ⑦ Render pain points ────────────────────────────────── */
         const ppEl = $('pain-points');
         ppEl.innerHTML = '';
         (data.painPoints || []).forEach((pt, i) => {
@@ -744,7 +768,7 @@ Respond with ONLY this JSON structure (no extra text):
           ppEl.appendChild(div);
         });
 
-        /* --- render email --- */
+        /* ── ⑧ Render email ──────────────────────────────────────── */
         const subject = data.emailSubject || '';
         const body    = data.emailBody || '';
         $('email-output').innerHTML =
@@ -756,22 +780,51 @@ Respond with ONLY this JSON structure (no extra text):
         $('output-wrapper').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
       } catch (err) {
-        if (err.message.includes('AbortError') || (err.name === 'AbortError')) {
-           // Handled deliberately by user cancellation
-           console.log('User cancelled the generation.');
+
+        /* ── ⑩ Graceful Error Mapper ─────────────────────────────────
+           Maps raw API/network errors to typed, user-friendly messages.
+           Categories: Abort/Timeout | Key (401/403) | Quota (429) | Model (404) | Unknown
+        ─────────────────────────────────────────────────────────────── */
+        if (err.message.includes('AbortError') || err.name === 'AbortError') {
+          if (signal.aborted && !err.message.includes('cancelled')) {
+            // 30s auto-timeout fired
+            showError('⏱ Request timed out after 30 seconds. Please check your connection and try again.');
+          }
+          console.log('[LeadGenius AI] Generation aborted.');
+
         } else {
-          const msg = err.message || 'Unknown error';
-          if (msg.includes('API_KEY_INVALID') || msg.includes('API key')) {
-            showError('Invalid API key. Please check your Gemini API key and try again.');
-            localStorage.removeItem('gemini_api_key'); // clear invalid key
-          } else if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
-            showError('API quota exceeded. Please check your Gemini billing or try later.');
+          const msg = (err.message || '').toLowerCase();
+
+          if (msg.includes('401') || msg.includes('403') ||
+              msg.includes('api_key_invalid') || msg.includes('api key')) {
+            // KEY ISSUE (401/403)
+            showError('🔑 Key Issue (401/403): Your API key is invalid or has been revoked. ' +
+                      'Please visit makersuite.google.com to verify your key and try again.');
+            localStorage.removeItem('gemini_api_key');
+
+          } else if (msg.includes('429') || msg.includes('resource_exhausted') ||
+                     msg.includes('quota')) {
+            // QUOTA ISSUE (429)
+            showError('📊 Quota Issue (429): Your Gemini API free-tier quota is exhausted. ' +
+                      'Visit console.cloud.google.com to upgrade your plan or wait for the daily reset.');
+
+          } else if (msg.includes('model_not_found') || msg.includes('404') ||
+                     msg.includes('not found')) {
+            // MODEL AVAILABILITY ISSUE (404) — all candidates failed
+            showError('🤖 Model Availability Issue (404): All Gemini model versions are ' +
+                      'currently unavailable in your region. Please try again in a few minutes.');
+
+          } else if (msg.includes('unexpected format')) {
+            showError('⚠️ The AI returned an unexpected response format. Please try again.');
+
           } else {
-            showError(`Error: ${msg}`);
+            // UNKNOWN — surface message for debugging
+            showError(`❌ Unexpected Error: ${err.message || 'Unknown error. Please try again.'}`);
           }
         }
+
       } finally {
-        clearTimeout(timeoutId); // Always clear the 30s timeout
+        clearTimeout(timeoutId); // Always clear the 30s auto-timeout
         resetUI();
         activeAbortController = null;
       }
