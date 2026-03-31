@@ -426,7 +426,8 @@
           <!-- Feature cards -->
           <div class="gradient-border p-6 space-y-3 hover:shadow-glow-sm transition-all duration-300">
             <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-500/30 to-purple-500/20 flex items-center justify-center">
-              <svg class="w-4.5 h-4.5 text-brand-400 w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <!-- BUG-08 FIX: Removed invalid w-4.5 h-4.5 (non-standard Tailwind) and duplicate w-5 h-5 -->
+              <svg class="w-5 h-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/>
               </svg>
             </div>
@@ -507,10 +508,11 @@
   <!-- ──────────────────────────────────────────────────────────── -->
   <!--  JAVASCRIPT — ESM via importmap                              -->
   <!-- ──────────────────────────────────────────────────────────── -->
+  <!-- BUG-07 FIX: Switched from esm.run to jsDelivr (more reliable, versioned, no SRI concern on dynamic imports) -->
   <script type="importmap">
     {
       "imports": {
-        "@google/generative-ai": "https://esm.run/@google/generative-ai"
+        "@google/generative-ai": "https://cdn.jsdelivr.net/npm/@google/generative-ai/+esm"
       }
     }
   </script>
@@ -554,10 +556,9 @@
       input.type = input.type === 'password' ? 'text' : 'password';
     };
 
-    /* ── save API key dynamically ────────────────────────────── */
-    $('api-key').addEventListener('input', (e) => {
-      localStorage.setItem('gemini_api_key', e.target.value.trim());
-    });
+    /* ── BUG-03 FIX: Removed per-keystroke localStorage write.
+       Partial keys (e.g. "AIza") were persisted if the tab closed mid-type.
+       Key is now saved ONLY on a successful generatePitch() call (line ~620). ── */
 
     /* ── copy to clipboard ───────────────────────────────────── */
     window.copyToClipboard = async () => {
@@ -573,7 +574,13 @@
           $('copy-btn').classList.remove('text-green-400', 'border-green-500/40');
         }, 2000);
       } catch {
+        /* BUG-01 FIX: "Failed" state now resets after 2s (same pattern as success path) */
         $('copy-label').textContent = 'Failed';
+        $('copy-btn').classList.add('text-red-400', 'border-red-500/40');
+        setTimeout(() => {
+          $('copy-label').textContent = 'Copy Email';
+          $('copy-btn').classList.remove('text-red-400', 'border-red-500/40');
+        }, 2000);
       }
     };
 
@@ -630,10 +637,14 @@
         Generating…`;
       show('loader');
 
-      /* --- Setup AbortController --- */
+      /* --- Setup AbortController + 30s auto-timeout (fixes infinite loading bug) --- */
       if (activeAbortController) activeAbortController.abort();
       activeAbortController = new AbortController();
       const signal = activeAbortController.signal;
+      // Auto-abort after 30 seconds to prevent infinite loading state
+      const timeoutId = setTimeout(() => {
+        activeAbortController.abort();
+      }, 30000);
 
       /* --- build prompt --- */
       const currentYear = new Date().getFullYear();
@@ -733,6 +744,7 @@ Respond with ONLY this JSON structure (no extra text):
           }
         }
       } finally {
+        clearTimeout(timeoutId); // Always clear the 30s timeout
         resetUI();
         activeAbortController = null;
       }
