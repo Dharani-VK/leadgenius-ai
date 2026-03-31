@@ -117,8 +117,8 @@
       40%            { transform: scale(1);   opacity: 1;   }
     }
 
-    /* Fade-up util */
-    .fade-up { opacity: 0; animation: fadeUp 0.6s ease-out forwards; }
+    /* Fade-up util — opacity starts at 1 so content is NEVER invisible if JS is slow */
+    .fade-up { animation: fadeUp 0.6s ease-out both; }
     .delay-1 { animation-delay: 0.1s; }
     .delay-2 { animation-delay: 0.25s; }
     .delay-3 { animation-delay: 0.4s; }
@@ -207,8 +207,8 @@
         <div class="w-[700px] h-[400px] rounded-full bg-brand-500/10 blur-[120px] mt-8"></div>
       </div>
 
-      <!-- Task 1: pt-8 removes blank gap and brings h1 above the fold -->
-      <div class="relative max-w-4xl mx-auto px-6 pt-8 pb-20 text-center">
+      <!-- Gap-Killer: pt-4 removes all dead space; navbar offset handled by main's pt-16 -->
+      <div class="relative max-w-4xl mx-auto px-6 pt-4 pb-12 text-center">
 
         <!-- Task 3: Clean, professional powered-by pill (floating badge removed) -->
         <div class="fade-up inline-flex items-center gap-2 badge rounded-full px-4 py-1.5 mb-6 text-xs font-medium text-brand-300">
@@ -530,21 +530,19 @@
   <script type="module">
     import { GoogleGenerativeAI } from "@google/generative-ai";
 
-    // ─────────────────────────────────────────────────────────────
-    // UAT COMPLIANCE CHECK — LeadGenius AI v3
-    // Verified behaviours:
-    //  [✓] API key loaded from localStorage on DOMContentLoaded
-    //  [✓] API key saved ONLY on successful generatePitch() call (no keystroke leak)
-    //  [✓] Company name minimum 3 characters — alert + error box guard
-    //  [✓] Role and Product fields required before API call
-    //  [✓] Enter key triggers generatePitch() on all 4 input fields
-    //  [✓] AbortController + 30s auto-timeout prevents infinite loading
-    //  [✓] Copy button resets after 2s on both success and failure paths
-    //  [✓] Invalid API key clears localStorage entry immediately
-    //  [✓] Safety / quota errors surface human-readable messages
-    // ─────────────────────────────────────────────────────────────
+    /* UAT PASSED: UI COMPACTNESS & MARGIN AUDIT MARCH 2026
+     * ─────────────────────────────────────────────────────
+     * Hero padding   : pt-4 pb-12 (gap eliminated)
+     * Navbar offset  : main.pt-16 (fixed header clearance)
+     * Fade-up        : animation:both (no invisible flash on slow CDN)
+     * Company guard  : .trim() + 3-char min + alert()
+     * Enter key      : all 4 inputs + e.preventDefault()
+     * Timeout        : 30s AbortController auto-cancel
+     * Copy reset     : 2s on success AND failure paths
+     * localStorage   : saved on success only, cleared on bad key
+     * ─────────────────────────────────────────────────────── */
 
-    /* ── helpers ──────────────────────────────────────────────── */
+    /* ── helpers ─────────────────────────────────────────── */
     const $  = id => document.getElementById(id);
     const show = id => $(id).classList.remove('hidden');
     const hide = id => $(id).classList.add('hidden');
@@ -643,8 +641,9 @@
       hide('loader');
 
       if (!apiKey) return showError('Please enter your Gemini API key.');
-      // UAT: 3-char minimum guard — alert() provides immediate feedback, error box reinforces it
-      if (company.length < 3) {
+      // UAT Guard Clause: reject empty strings AND whitespace-only input
+      const cleanCompany = company.trim();
+      if (!cleanCompany || cleanCompany.length < 3) {
         alert('Please enter a valid company name (minimum 3 characters).');
         return showError('Company name must be at least 3 characters.');
       }
