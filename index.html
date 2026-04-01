@@ -208,7 +208,7 @@
       <div class="relative max-w-4xl mx-auto px-6 pt-20 pb-16 text-center">
         <div class="fade-up inline-flex items-center gap-2 badge-pill rounded-full px-4 py-1.5 mb-6 text-xs font-medium text-brand-300">
           <span class="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-slow"></span>
-          Powered by Google Gemini 2.0 Flash
+          Powered by Gemini &amp; Groq AI
         </div>
 
         <h1 class="fade-up delay-1 text-5xl md:text-6xl lg:text-7xl font-black text-white leading-[1.05] tracking-tight mb-6">
@@ -294,12 +294,12 @@
         <svg class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
         </svg>
-        <p class="text-amber-300 text-sm leading-relaxed">
-          <strong class="text-amber-200 font-semibold">API Key Required:</strong>
-          Enter your <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener"
-            class="underline underline-offset-2 hover:text-amber-100 transition-colors">Google AI Studio API key</a> below.
-          It is saved only in your browser's local storage and never sent to our servers.
-        </p>
+        <div class="text-amber-300 text-sm leading-relaxed space-y-1">
+          <p><strong class="text-amber-200 font-semibold">API Key Required — choose one:</strong></p>
+          <p>🔷 <strong class="text-amber-200">Gemini</strong> (starts with <code class="text-xs bg-white/10 px-1 rounded">AIza</code>) — get it at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" class="underline underline-offset-2 hover:text-amber-100">aistudio.google.com</a></p>
+          <p>🟢 <strong class="text-amber-200">Groq</strong> (starts with <code class="text-xs bg-white/10 px-1 rounded">gsk_</code>) — get it at <a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="underline underline-offset-2 hover:text-amber-100">console.groq.com</a> — free, 14k req/day</p>
+          <p class="text-amber-400/70 text-xs">Keys are saved only in your browser — never sent to our servers.</p>
+        </div>
       </div>
 
       <!-- Input Card -->
@@ -308,12 +308,12 @@
         <!-- API Key -->
         <div class="space-y-2">
           <label for="api-key" class="block text-sm font-medium text-slate-300">
-            Gemini API Key
-            <span class="ml-1 text-xs text-slate-500">(saved in browser only)</span>
+            AI API Key
+            <span class="ml-1 text-xs text-slate-500">(Gemini or Groq — saved in browser only)</span>
           </label>
           <div class="relative">
             <input id="api-key" type="password"
-              placeholder="AIza••••••••••••••••••••••••••••••••••••"
+              placeholder="AIza… (Gemini) or gsk_… (Groq)"
               autocomplete="off"
               class="w-full bg-dark-700 border border-white/10 rounded-xl px-4 py-3 pr-12 text-sm text-slate-100 placeholder-slate-600
                      focus:outline-none focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/20 transition-all duration-200" />
@@ -525,7 +525,7 @@
         </div>
         <span class="text-slate-400 text-sm">© <span id="current-year"></span> <span class="text-white font-medium">LeadGenius AI</span>. All rights reserved.</span>
       </div>
-      <p class="text-slate-600 text-xs">Built with Google Gemini 2.0 Flash · Powered by AI</p>
+      <p class="text-slate-600 text-xs">Powered by Gemini &amp; Groq AI · Runs fully client-side</p>
     </div>
   </footer>
 
@@ -544,6 +544,9 @@
   <script type="module">
     import { GoogleGenerativeAI } from "@google/generative-ai";
 
+    /* ── provider detection ───────────────────────────────────── */
+    const detectProvider = key => key.startsWith('gsk_') ? 'groq' : 'gemini';
+
     /* ── helpers ──────────────────────────────────────────────── */
     const $    = id => document.getElementById(id);
     const show = id => $(id).classList.remove('hidden');
@@ -553,7 +556,7 @@
     $('current-year').textContent = new Date().getFullYear();
 
     /* ── restore saved API key (module-level, no DOMContentLoaded race) ── */
-    const savedKey = localStorage.getItem('gemini_api_key');
+    const savedKey = localStorage.getItem('lg_api_key');
     if (savedKey) $('api-key').value = savedKey;
 
     /* ── mobile menu toggle (with aria-expanded) ─────────────── */
@@ -632,13 +635,9 @@
 
     /* ════════════════════════════════════════════════════════════
        CORE FUNCTION: generatePitch
-       Model fallback order (2026):
-         1. gemini-2.0-flash          — primary (fastest, widest availability)
-         2. gemini-2.0-flash-lite     — lighter fallback
-         3. gemini-1.5-flash          — legacy regional fallback
-         4. gemini-1.5-flash-8b       — ultra-light last resort
-       Only HTTP 404 "model not found" advances to the next candidate.
-       Auth (401/403) and quota (429) errors rethrow immediately.
+       Auto-detects provider from key prefix:
+         gsk_  → Groq  (llama-3.3-70b-versatile, OpenAI-compat REST)
+         AIza  → Gemini (2.0-flash → 2.0-flash-lite → 1.5-flash → 1.5-flash-8b)
     ════════════════════════════════════════════════════════════ */
     window.generatePitch = async () => {
       const apiKey  = $('api-key').value.trim();
@@ -651,10 +650,12 @@
       hide('output-wrapper');
       hide('loader');
 
-      if (!apiKey)              return showError('Please enter your Gemini API key.');
+      if (!apiKey)              return showError('Please enter your Gemini (AIza…) or Groq (gsk_…) API key.');
       if (company.length < 3)   return showError('Company name must be at least 3 characters.');
       if (!role)                 return showError('Please enter the decision maker\'s role.');
       if (!product)              return showError('Please enter what your product/service does.');
+
+      const provider = detectProvider(apiKey);
 
       /* ── UI → loading state ──────────────────────────────────── */
       const btn = $('generate-btn');
@@ -707,64 +708,94 @@ Respond with ONLY this JSON structure (no extra text):
 }
 `.trim();
 
-      /* ── model fallback candidates ───────────────────────────── */
-      const MODEL_CANDIDATES = [
-        'gemini-2.0-flash',       // PRIMARY — latest, fastest, broadest regional availability
-        'gemini-2.0-flash-lite',  // lighter/cheaper fallback
-        'gemini-1.5-flash',       // legacy fallback for regions not yet on 2.0
-        'gemini-1.5-flash-8b',    // ultra-light last resort
-      ];
-
+      /* ══════════════════════════════════════════════════════════
+         PROVIDER ROUTING
+      ════════════════════════════════════════════════════════════ */
       try {
-        const genAI = new GoogleGenerativeAI(apiKey);
-        let result        = null;
-        let resolvedModel = null;
+        let rawText = null;
 
-        for (const candidate of MODEL_CANDIDATES) {
-          if (signal.aborted) throw new Error('AbortError');
+        if (provider === 'groq') {
+          /* ── GROQ path (OpenAI-compatible REST) ─────────────── */
+          $('loader-text').textContent = 'Groq Llama is analysing pain points & crafting your pitch…';
 
-          // Update loader text to show which model is being tried
-          $('loader-text').textContent =
-            candidate === MODEL_CANDIDATES[0]
-              ? 'Gemini is analysing pain points & crafting your pitch…'
-              : `Trying model ${candidate}…`;
+          const abortPromise = new Promise((_, reject) => {
+            signal.addEventListener('abort', () => reject(new Error('AbortError')), { once: true });
+          });
 
-          try {
-            const model = genAI.getGenerativeModel({ model: candidate });
+          const fetchPromise = fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: 'llama-3.3-70b-versatile',
+              messages: [{ role: 'user', content: prompt }],
+              temperature: 0.7,
+              max_tokens: 1024,
+            }),
+            signal,
+          });
 
-            const abortPromise = new Promise((_, reject) => {
-              signal.addEventListener('abort', () => reject(new Error('AbortError')),
-                { once: true });
-            });
+          const res = await Promise.race([fetchPromise, abortPromise]);
 
-            result        = await Promise.race([model.generateContent(prompt), abortPromise]);
-            resolvedModel = candidate;
-            console.info(`[LeadGenius AI] Model resolved: ${candidate}`);
-            break;
-
-          } catch (err) {
-            const msg = (err.message || '').toLowerCase();
-            // Only advance on a true 404 "model not found". Do NOT swallow auth/quota errors.
-            const is404 = msg.includes(' 404 ') || msg.startsWith('404') ||
-                          msg.includes('[404]') ||
-                          (msg.includes('model') && msg.includes('not found'));
-            if (is404) {
-              console.warn(`[LeadGenius AI] ${candidate} → 404, trying next candidate…`);
-              continue;
-            }
-            throw err; // auth, quota, network, abort — stop immediately
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => ({}));
+            const errMsg  = errJson?.error?.message || res.statusText;
+            if (res.status === 401 || res.status === 403) throw new Error(`401: ${errMsg}`);
+            if (res.status === 429) throw new Error(`429: ${errMsg}`);
+            throw new Error(`GROQ_${res.status}: ${errMsg}`);
           }
-        }
 
-        if (!result) {
-          throw new Error('ALL_MODELS_404: No Gemini model is available in your region right now.');
+          const json = await res.json();
+          rawText = json.choices?.[0]?.message?.content || '';
+
+        } else {
+          /* ── GEMINI path (SDK with model fallback) ───────────── */
+          const MODEL_CANDIDATES = [
+            'gemini-2.0-flash',
+            'gemini-2.0-flash-lite',
+            'gemini-1.5-flash',
+            'gemini-1.5-flash-8b',
+          ];
+
+          const genAI = new GoogleGenerativeAI(apiKey);
+          let result  = null;
+
+          for (const candidate of MODEL_CANDIDATES) {
+            if (signal.aborted) throw new Error('AbortError');
+
+            $('loader-text').textContent =
+              candidate === MODEL_CANDIDATES[0]
+                ? 'Gemini is analysing pain points & crafting your pitch…'
+                : `Trying model ${candidate}…`;
+
+            try {
+              const model = genAI.getGenerativeModel({ model: candidate });
+              const abortPromise = new Promise((_, reject) => {
+                signal.addEventListener('abort', () => reject(new Error('AbortError')), { once: true });
+              });
+              result = await Promise.race([model.generateContent(prompt), abortPromise]);
+              console.info(`[LeadGenius AI] Gemini model resolved: ${candidate}`);
+              break;
+            } catch (err) {
+              const msg   = (err.message || '').toLowerCase();
+              const is404 = msg.includes(' 404 ') || msg.startsWith('404') ||
+                            msg.includes('[404]') ||
+                            (msg.includes('model') && msg.includes('not found'));
+              if (is404) { console.warn(`${candidate} → 404, trying next…`); continue; }
+              throw err;
+            }
+          }
+
+          if (!result) throw new Error('ALL_MODELS_404: No Gemini model available in your region.');
+          rawText = result.response.text();
         }
 
         if (signal.aborted) throw new Error('AbortError');
 
         /* ── parse JSON ──────────────────────────────────────── */
-        const text    = result.response.text();
-        const cleaned = text.replace(/```json|```/gi, '').trim();
+        const cleaned = rawText.replace(/```json|```/gi, '').trim();
         let data;
         try {
           data = JSON.parse(cleaned);
@@ -792,7 +823,7 @@ Respond with ONLY this JSON structure (no extra text):
           `<span class="text-brand-300 font-semibold">Subject: ${escapeHtml(subject)}</span>\n\n${escapeHtml(body)}`;
 
         /* ── save valid key + show output ────────────────────── */
-        localStorage.setItem('gemini_api_key', apiKey);
+        localStorage.setItem('lg_api_key', apiKey);
         hide('loader');
         show('output-wrapper');
         $('output-wrapper').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -810,21 +841,31 @@ Respond with ONLY this JSON structure (no extra text):
           // silent abort from double-click guard — no message needed
 
         } else if (msg.includes('401') || msg.includes('403') ||
-                   msg.includes('api_key_invalid') || msg.includes('api key')) {
-          showError('🔑 Invalid or revoked API key (401/403). Visit aistudio.google.com to create a new key.');
-          localStorage.removeItem('gemini_api_key');
+                   msg.includes('api_key_invalid') || msg.includes('api key') ||
+                   msg.includes('invalid api key') || msg.includes('authentication')) {
+          const hint = provider === 'groq'
+            ? 'Get a valid key at console.groq.com/keys'
+            : 'Get a valid key at aistudio.google.com';
+          showError(`🔑 Invalid or revoked API key (401/403). ${hint}`);
+          localStorage.removeItem('lg_api_key');
 
-        } else if (msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('quota')) {
-          showError('📊 API quota exceeded (429). Your free-tier limit has been reached. Wait for the daily reset or upgrade at console.cloud.google.com.');
+        } else if (msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('quota') || msg.includes('rate limit')) {
+          const hint = provider === 'groq'
+            ? 'Groq free tier: 14,400 req/day. Try again tomorrow or use a different account.'
+            : 'Gemini free tier: 1,500 req/day. Try Groq (gsk_…) as an alternative!';
+          showError(`📊 Quota / rate-limit hit (429). ${hint}`);
 
         } else if (msg.includes('safety') || msg.includes('blocked')) {
-          showError('🛡 Gemini blocked this request due to safety filters. Please rephrase the company name or role and try again.');
+          showError('🛡 The AI blocked this request due to safety filters. Please rephrase the company name or role and try again.');
 
         } else if (msg.includes('all_models_404')) {
-          showError('🤖 All Gemini model versions returned 404. This usually means:\n• Your API key does not have Gemini API access enabled\n• Google AI Studio is temporarily unavailable in your region\nPlease visit aistudio.google.com, confirm your key has API access, and try again in a few minutes.');
+          showError('🤖 All Gemini model versions returned 404.\n• Your API key may not have Gemini access enabled\n• Try using a Groq key (gsk_…) from console.groq.com instead');
 
         } else if (msg.includes('parse_error')) {
           showError('⚠️ The AI returned an unexpected response. Please try again.');
+
+        } else if (msg.startsWith('groq_')) {
+          showError(`❌ Groq API error: ${err.message}. Check your key at console.groq.com`);
 
         } else {
           showError(`❌ Unexpected error: ${err.message || 'Unknown. Please try again.'}`);
